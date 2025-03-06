@@ -7,12 +7,13 @@ public:
     virtual ~Sensor() {}      // Virtual destructor for proper cleanup
 };
 
-// Simulated Barometer (BMI088) - Provides pressure and altitude (simplified)
+// Simulated Barometer (BMI088) - Provides pressure and altitude
 class SimulatedBarometer : public Sensor {
 public:
     String read() override {
         float pressure = random(95000, 105000) / 100.0; // hPa (950-1050)
-        return "baro_press:" + String(pressure);
+        float altitude = random(0, 10000) / 10.0;      // meters (0-1000m)
+        return "baro_press:" + String(pressure) + ",altitude:" + String(altitude);
     }
 };
 
@@ -38,11 +39,15 @@ public:
 
 // Simulated GPS Receiver (u-blox MAX-8Q)
 class SimulatedGPS : public Sensor {
+private:
+    uint8_t satellites = 8; // Simulated number of satellites (fixed for simplicity)
+
 public:
     String read() override {
-        float lat = 37.7749 + (random(-100, 100) / 10000.0); // Simulate small movement
-        float lon = -122.4194 + (random(-100, 100) / 10000.0);
-        return "gps_lat:" + String(lat, 6) + ",gps_lon:" + String(lon, 6);
+        float lat = 37.7749 + (random(-100, 100) / 10000.0); // Latitude
+        float lon = -122.4194 + (random(-100, 100) / 10000.0); // Longitude
+        satellites = random(4, 12); // Vary between 4-12 satellites
+        return "latitude:" + String(lat, 6) + ",longitude:" + String(lon, 6) + ",satellites:" + String(satellites);
     }
 };
 
@@ -55,25 +60,30 @@ public:
     }
 };
 
-// Simulated BMI088 Accelerometer
+// Simulated BMI088 Accelerometer - Acceleration and velocity
 class SimulatedAccelerometer : public Sensor {
 public:
     String read() override {
         float acc_x = random(-100, 100) / 10.0; // m/s²
         float acc_y = random(-100, 100) / 10.0;
         float acc_z = random(-100, 100) / 10.0;
-        return "acc_x:" + String(acc_x) + ",acc_y:" + String(acc_y) + ",acc_z:" + String(acc_z);
+        float vel_x = random(-50, 50) / 10.0;   // m/s (velocity)
+        float vel_y = random(-50, 50) / 10.0;
+        float vel_z = random(-50, 50) / 10.0;
+        return "acceleration_x:" + String(acc_x) + ",acceleration_y:" + String(acc_y) + 
+               ",acceleration_z:" + String(acc_z) + ",velocity_x:" + String(vel_x) + 
+               ",velocity_y:" + String(vel_y) + ",velocity_z:" + String(vel_z);
     }
 };
 
-// Simulated BMI088 Gyroscope
+// Simulated BMI088 Gyroscope - Pitch, yaw, roll
 class SimulatedGyroscope : public Sensor {
 public:
     String read() override {
-        float gyro_x = random(-1000, 1000) / 10.0; // deg/s (pitch)
-        float gyro_y = random(-1000, 1000) / 10.0; // (roll)
-        float gyro_z = random(-1000, 1000) / 10.0; // (yaw)
-        return "gyro_x:" + String(gyro_x) + ",gyro_y:" + String(gyro_y) + ",gyro_z:" + String(gyro_z);
+        float pitch = random(-1000, 1000) / 10.0; // deg/s
+        float roll = random(-1000, 1000) / 10.0;
+        float yaw = random(-1000, 1000) / 10.0;
+        return "pitch:" + String(pitch) + ",roll:" + String(roll) + ",yaw:" + String(yaw);
     }
 };
 
@@ -85,19 +95,23 @@ public:
     virtual ~Communication() {}
 };
 
-// Simulated LoRa communication
+// Simulated LoRa communication (RFM95CW)
 class SimulatedLoRa : public Communication {
 private:
     String lastSentData;
+    int32_t rssi = -50; // Simulated RSSI in dBm
+
 public:
     void send(const String& data) override {
-        lastSentData = data; // Store data for ground station to "receive"
+        lastSentData = data;
+        rssi = random(-120, -30); // Simulate RSSI variation
     }
     String receive() override {
         String data = lastSentData;
-        lastSentData = ""; // Clear after reading (simulate one-time receive)
+        lastSentData = ""; // Clear after reading
         return data;
     }
+    int32_t getRssi() { return rssi; }
 };
 
 // Navigation Computer (NAVC) - Simulates sensor data collection
@@ -110,6 +124,7 @@ private:
     Sensor* tempSensor;
     Sensor* accelerometer;
     Sensor* gyroscope;
+    uint32_t id = 1; // Simulated pub id
 
 public:
     NAVC() {
@@ -133,14 +148,24 @@ public:
     }
 
     String collectData() {
-        String data = "[timestamp:" + String(millis()) + ",";
+        unsigned long currentTime = millis();
+        uint32_t minute = (currentTime / 60000) % 60; // Minutes since start
+        uint32_t second = (currentTime / 1000) % 60;  // Seconds since start
+        String missionTime = String(minute) + "m" + String(second) + "s";
+
+        String data = "[id:" + String(id) + ",";
+        data += "mission_time:" + missionTime + ",";
+        data += "connected:1,"; // Simulate always connected
         data += accelerometer->read() + ",";
         data += gyroscope->read() + ",";
         data += magnetometer->read() + ",";
         data += barometer->read() + ",";
         data += pressureSensor->read() + ",";
         data += gps->read() + ",";
-        data += tempSensor->read() + "]";
+        data += tempSensor->read() + ",";
+        data += "battery:" + String(random(370, 420) / 100.0) + ","; // Battery 3.7-4.2V
+        data += "minute:" + String(minute) + ",";
+        data += "second:" + String(second) + "]";
         return data;
     }
 };
@@ -154,7 +179,11 @@ public:
     FC(Communication* communication) : comm(communication) {}
 
     void transmit(const String& data) {
-        comm->send(data); // Send data via communication module
+        comm->send(data);
+    }
+
+    int32_t getRssi() {
+        return static_cast<SimulatedLoRa*>(comm)->getRssi();
     }
 };
 
@@ -169,7 +198,8 @@ public:
     void receiveAndForward() {
         String data = comm->receive();
         if (data != "") {
-            Serial.println(data); // Output to UART (Serial monitor)
+            int32_t rssi = static_cast<SimulatedLoRa*>(comm)->getRssi();
+            Serial.println(data + ",rssi:" + String(rssi));
         }
     }
 };
